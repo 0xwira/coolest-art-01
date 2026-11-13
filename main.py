@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""The Lantern Kitsune - entry program for make.fun coolest-art-01.
+"""Between Water and Fire - entry program for make.fun coolest-art-01.
 
-The artwork ships in this repository as artwork.jpg, a 1024x683 JPEG.
-This program inspects the file's JPEG structure (signature, marker walk,
-start-of-frame dimensions, end-of-image), checks it against the
-competition's image gate (at most 1 MiB, at most 1024x1024 pixels) and
+The artwork ships in this repository as artwork.jpg, a 1024x1024 JPEG:
+a demon-masked samurai caught between a water dragon rising from the
+waves behind him and a fire dragon wreathed in flames below, painted in
+classical ukiyo-e style. This program inspects the file's JPEG structure
+(signature, marker walk, start-of-frame dimensions, end-of-image),
+inventories its marker segments, checks it against the competition's
+image gate (at most 1 MiB, at most 1024x1024 pixels, square format) and
 only then publishes it as /output/entry.png.
 """
 
@@ -61,6 +64,37 @@ def jpeg_dimensions(data):
     raise ValueError("no start-of-frame marker found")
 
 
+def marker_inventory(data):
+    """Count JPEG marker segments by marker byte.
+
+    Walks the same marker stream as jpeg_dimensions but keeps going
+    until the start-of-scan marker, tallying every segment it passes.
+    The inventory is a cheap fingerprint: a structurally odd file (a
+    PNG wearing a .jpg name, a truncated export) shows up here as a
+    missing or lopsided tally before the art is allowed to ship.
+    """
+    counts = {}
+    pos = 2
+    size = len(data)
+    while pos + 1 < size:
+        if data[pos] != 0xFF:
+            raise ValueError(f"expected marker at offset {pos}")
+        marker = data[pos + 1]
+        counts[marker] = counts.get(marker, 0) + 1
+        pos += 2
+        if marker in STANDALONE_MARKERS:
+            continue
+        if marker == SOS_MARKER:
+            break
+        if pos + 1 >= size:
+            raise ValueError("truncated marker segment")
+        (seg_len,) = struct.unpack(">H", data[pos:pos + 2])
+        if seg_len < 2 or pos + seg_len > size:
+            raise ValueError("marker segment runs past end of file")
+        pos += seg_len
+    return counts
+
+
 def check_gate(data, width, height):
     """Return a list of gate violations; empty means the art may ship."""
     problems = []
@@ -68,6 +102,8 @@ def check_gate(data, width, height):
         problems.append(f"{len(data)} bytes exceeds the {MAX_BYTES}-byte gate")
     if width > MAX_WIDTH or height > MAX_HEIGHT:
         problems.append(f"{width}x{height} exceeds the {MAX_WIDTH}x{MAX_HEIGHT} gate")
+    if width != height:
+        problems.append(f"{width}x{height} is not the square format this entry ships")
     return problems
 
 
@@ -77,6 +113,9 @@ def main():
     with open(source, "rb") as fh:
         data = fh.read()
     width, height = jpeg_dimensions(data)
+    inventory = marker_inventory(data)
+    pretty = ", ".join(f"0x{m:02X}x{c}" for m, c in sorted(inventory.items()))
+    print(f"marker inventory: {pretty}")
     problems = check_gate(data, width, height)
     if problems:
         for problem in problems:

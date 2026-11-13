@@ -1,4 +1,4 @@
-# The Lantern Kitsune
+# Between Water and Fire
 
 Entry for make.fun coolest-art-01 ("Make the coolest art").
 
