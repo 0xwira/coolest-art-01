@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""Between Water and Fire - entry program for make.fun coolest-art-01.
+"""She Knits the Sky - entry program for make.fun coolest-art-01.
 
 The artwork ships in this repository as artwork.jpg, a 1024x1024 JPEG:
-a demon-masked samurai caught between a water dragon rising from the
-waves behind him and a fire dragon wreathed in flames below, painted in
-classical ukiyo-e style. This program inspects the file's JPEG structure
-(signature, marker walk, start-of-frame dimensions, end-of-image),
-inventories its marker segments, checks it against the competition's
-image gate (at most 1 MiB, at most 1024x1024 pixels, square format) and
-only then publishes it as /output/entry.png.
+a flat 2D ukiyo-e woodblock-style print on visible canvas grain, where a
+colossal golden koi with crochet-lace fins swims across a deep indigo
+night sky. A braided strand of yarn unravels from the koi and spirals
+down to a rooftop, where a tiny grandmother sits knitting the great fish
+into the sky above a miniature lantern-lit village.
+
+This program inspects the file's JPEG structure (signature, marker walk,
+start-of-frame dimensions, end-of-image), inventories its marker
+segments, estimates the scan's detail density (a soft, low-detail export
+must not ship in place of the textured print), checks everything against
+the competition's image gate (at most 1 MiB, at most 1024x1024 pixels,
+square format) and only then publishes it as /output/entry.png.
 """
 
 import hashlib
@@ -19,6 +24,9 @@ import sys
 MAX_BYTES = 1_048_576
 MAX_WIDTH = 1024
 MAX_HEIGHT = 1024
+# Floor for scan_detail_ratio(): the textured print measures ~0.43
+# scan bytes per pixel; a flat or blurred stand-in falls far below.
+MIN_DETAIL_RATIO = 0.15
 
 # JPEG markers that carry no length field and no payload.
 STANDALONE_MARKERS = {0x01, 0xD8, 0xD9} | set(range(0xD0, 0xD8))
@@ -95,6 +103,38 @@ def marker_inventory(data):
     return counts
 
 
+def scan_detail_ratio(data):
+    """Estimate detail density: entropy-coded scan bytes per pixel.
+
+    Everything after the start-of-scan segment is the compressed image
+    data itself. Fine texture (canvas grain, crochet patterning, scale
+    work) cannot be compressed away, so it shows up as scan bytes; a
+    soft or flat export of the same picture collapses to a fraction of
+    the size. This is a blunt guard, not a quality score: it exists so a
+    low-detail stand-in can never quietly replace the textured print.
+    """
+    pos = 2
+    size = len(data)
+    while pos + 1 < size:
+        if data[pos] != 0xFF:
+            raise ValueError(f"expected marker at offset {pos}")
+        marker = data[pos + 1]
+        pos += 2
+        if marker in STANDALONE_MARKERS:
+            continue
+        if pos + 1 >= size:
+            raise ValueError("truncated marker segment")
+        (seg_len,) = struct.unpack(">H", data[pos:pos + 2])
+        if seg_len < 2 or pos + seg_len > size:
+            raise ValueError("marker segment runs past end of file")
+        if marker == SOS_MARKER:
+            scan_bytes = size - 2 - (pos + seg_len)  # minus the EOI marker
+            width, height = jpeg_dimensions(data)
+            return scan_bytes / (width * height)
+        pos += seg_len
+    raise ValueError("no start-of-scan marker found")
+
+
 def check_gate(data, width, height):
     """Return a list of gate violations; empty means the art may ship."""
     problems = []
@@ -116,7 +156,11 @@ def main():
     inventory = marker_inventory(data)
     pretty = ", ".join(f"0x{m:02X}x{c}" for m, c in sorted(inventory.items()))
     print(f"marker inventory: {pretty}")
+    ratio = scan_detail_ratio(data)
+    print(f"detail density: {ratio:.3f} scan bytes/pixel (floor {MIN_DETAIL_RATIO})")
     problems = check_gate(data, width, height)
+    if ratio < MIN_DETAIL_RATIO:
+        problems.append(f"detail density {ratio:.3f} below the {MIN_DETAIL_RATIO} floor")
     if problems:
         for problem in problems:
             print(f"gate check failed: {problem}", file=sys.stderr)
